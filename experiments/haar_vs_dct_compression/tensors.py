@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 import json
 from scipy.fftpack import dct, fft, ifft
-import pywt 
+import tqdm
 
 def assert_vec(x):
 	assert len(x.shape) == 2
@@ -23,10 +23,10 @@ def assert_real(M):
 def normF(A):
 	return np.sum(A**2)
 
-def as_vec(A): 
+def as_vec(A):
 	return np.flatten(A)
 
-def as_mat(A, m,n):
+def as_mat(A, m, n):
 	return np.reshape((A), (m, n), "F")
 
 def twist(A):
@@ -37,24 +37,6 @@ def sq(A):
 	assert_tensor(A, order=3)
 	assert A.shape[1] == 1
 	return A[:, 0, :]
-
-def cT(A, M):
-	'''
-	Conjugate transpose
-	'''
-	assert_mat(M)
-	assert_tensor(A, 3)
-	Minv = safe_inv(M)
-	Ah = x3(A, M)
-	Ah_hermitian = Ah.conj().transpose((1, 0, 2))
-	return np.real_if_close(x3(Ah_hermitian, Minv), tol=1000)
-
-def rT(A, M):
-	'''
-	Real transpose
-	'''
-	return np.copy(A).transpose((1, 0, 2))
-
 
 def mode_unf(A, mode):
 	assert_tensor(A, order=3)
@@ -162,6 +144,7 @@ def fft_H(M):
 def m_SVD(A, M, inv_transform=True):
 	assert_tensor(A, order=3)
 	assert_mat(M)
+
 	Minv = safe_inv(M)
 
 	Ah = x3(A, M)
@@ -195,24 +178,6 @@ def dctmtx(n, normalize=False):
 	if(normalize):
 		d = d / np.sqrt(np.sum(d**2, axis=1))
 	return d
-
-def dyadic_decomp(r):
-	r = np.array(r).flatten()
-	assert np.log2(len(r)) == np.ceil(np.log2(len(r))), "Input must have length 2**k"
-	def _dyad(r, a=[]):
-		if(len(r) == 1):
-			return [r] + a # concatenation
-		return _dyad(r[:len(r)//2], [r[len(r)//2:]] + a)
-	return _dyad(r)
-	
-def wavelet_mtx(s, wvt):
-	assert np.log2(s) == np.ceil(np.log2(s))
-	def _dyad(r, a=[]):
-		if(len(r) == 1):
-			return [r] + a # concatenation
-		return _dyad(r[:len(r)//2], [r[len(r)//2:]] + a)
-	coeffs = [_dyad(r) for r in np.eye(s).astype(np.int64)]
-	return np.vstack([pywt.waverec(r, wvt) for r in coeffs])
 
 def haarmtx(n, normalize=False):
 	assert np.log2(n) == np.floor(np.log2(n)), "Haar matrices must be of side length 2**n"
@@ -259,30 +224,25 @@ def to_voxels(A):
 
 
 def tensor_to_json(A, path):
-	if(len(A.shape) == 4):
-		assert A.shape[3] == 3, "A must have 3 channels in each tensor cell"
-		m, p, n, _ = A.shape
-		colors = (A - np.min(A))/np.ptp(A)
+	m, p, n = A.shape
+	colors = np.zeros((m, p, n, 3))
+	if(np.iscomplex(A).any()):
+		intensities = np.angle(A)
+		intensities[intensities < 0] += 2*np.pi
+		intensities /= 2*np.pi
+		cmap = cm.get_cmap('twilight') # cyclic
 	else:
-		m, p, n = A.shape
-		colors = np.zeros((m, p, n, 3))
-		if(np.iscomplex(A).any()): 
-			intensities = np.angle(A)
-			intensities[intensities < 0] += 2*np.pi
-			intensities /= 2*np.pi
-			cmap = cm.get_cmap('twilight') # cyclic 
-		else:
-			intensities = (A - np.min(A)) / np.ptp(A)
-			cmap = cm.get_cmap('viridis')
-
-		for i in range(m):
-				for j in range(p):
-						for k in range(n):
-								x, y, z = j, i, k
-								c = cmap(intensities[i, j, k])
-								colors[i, j, k] = np.array((c[0], c[1], c[2]))
+		intensities = (A - np.min(A)) / np.ptp(A)
+		cmap = cm.get_cmap('viridis')
 	
-	colors_arr = [[[[round(float(c), 3) for c in colors[i, j, k]] for k in range(n)] for j in range(p)] for i in range(m)]
+	for i in range(m):
+		for j in range(p):
+			for k in range(n):
+				x, y, z = j, i, k
+				c = cmap(intensities[i, j, k])
+				colors[i, j, k] = np.array((c[0], c[1], c[2]))
+	
+	colors_arr = [[[[round(c, 3) for c in colors[i, j, k]] for k in range(n)] for j in range(p)] for i in range(m)]
 	with open(path, "w+") as f_out:
 		f_out.write(json.dumps(colors_arr))
 				
@@ -362,7 +322,7 @@ if __name__ == "__main__":
 	print(f"S is {s.shape}")
 	print(f"V is {v.shape}")
 
-	mnist = np.load("data/MNIST_32.npy")
+	mnist = np.load("MNIST_32.npy")
 	tensor_to_json(mnist, "tensorvis/public/vis/MNIST.json")
 	m, p, n = mnist.shape
 		
@@ -382,22 +342,7 @@ if __name__ == "__main__":
 	
 	tensor_to_json(matrix_algebra(M), "tensorvis/public/vis/Fourier_M.json")
 	tensor_to_json(matrix_algebra(H), "tensorvis/public/vis/Haar_M.json")
-	escalator = np.load("data/Escalator.npy")
-	
-	F = dftmtx(32)
-	tensor_to_json(matrix_algebra(F), "tensorvis/public/vis/DFT_Algebra.json")
-	
-	cats = np.load("data/Cats_RGB.npy")
-	tensor_to_json(cats, "tensorvis/public/vis/Cats.json")
-	cats_split = np.load("data/Cats_Split.npy")
-	u, s, v = m_SVD(cats_split, H)
-	tensor_to_json(u, "tensorvis/public/vis/Cats_Split_Haar_U.json")
-	tensor_to_json(s, "tensorvis/public/vis/Cats_Split_Haar_S.json")
-	tensor_to_json(v, "tensorvis/public/vis/Cats_Split_Haar_V.json")
-	
-	u, s, v = m_SVD(cats_split, F)
-	u, s, v = np.real(u), np.real(s), np.real(v) # these have small leftover phases from truncation error
-	tensor_to_json(u, "tensorvis/public/vis/Cats_Split_DFT_U.json")
-	tensor_to_json(s, "tensorvis/public/vis/Cats_Split_DFT_S.json")
-	tensor_to_json(v, "tensorvis/public/vis/Cats_Split_DFT_V.json")
+	escalator = np.load("Escalator.npy")
+		
+	tensor_to_json(matrix_algebra(dftmtx(32)), "tensorvis/public/vis/DFT_Algebra.json")
 	unittest.main()
