@@ -190,18 +190,17 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
             return np.tensordot(A[..., None], B, (-1, -1))
 
         for j in trange(iters):
-            Uhat, Shat, Vhat = x3(Uh, M), x3(S, M), x3(V, M)
-            Uhat_h = Uhat.conj().transpose((1, 0, 2))
-            Spr_hat = xFace(xFace(Uhat_h, Xhat), Vhat)
+            Uh_hat, Shat, Vhat = x3(Uh, M), x3(S, M), x3(V, M)
+            Spr_hat = xFace(xFace(Uh_hat, Xhat), Vhat)
 
             print(f"Sum norm over time: {np.sum(np.abs(Spr_hat))}")
             sumnorm_over_time.append(np.sum(np.abs(Spr_hat)))
 
             def fast_grad_trnsf(i, j):
                 grad_from_prods = Uh[:, :, i] @ Xhat[:, :, j] @ Vhat[:, :, j] + \
-                                  Uhat_h[:, :, j] @ X[:, :, i] @ Vhat[:, :, j] + \
-                                  Uhat_h[:, :, j] @ Xhat[:, :, j] @ V[:, :, i]
-                return np.sum(np.sign(Shat[:, :, j]) * grad_from_prods) / (m*p*n)
+                                  Uh_hat[:, :, j] @ X[:, :, i] @ Vhat[:, :, j] + \
+                                  Uh_hat[:, :, j] @ Xhat[:, :, j] @ V[:, :, i]
+                return np.sum(np.sign(Spr_hat[:, :, j]) * grad_from_prods) / (m*p*n)
             # note: dtype is for dtype of the indices, not the output
             grad = np.fromfunction(np.frompyfunc(fast_grad_trnsf, 2, 1), shape=(k, k), dtype=np.int)
             # output is dtype 'object' and should be float64
