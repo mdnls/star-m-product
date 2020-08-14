@@ -27,7 +27,7 @@ does tensorflow allow this? tf inner loop, numpy outer loop
 
 
 import numpy as np
-from tensors import  x3, xFace, xM, dftmtx, haarmtx, safe_inv, m_SVD, cT
+from tensors import  x3, xFace, xM, dftmtx, haarmtx, safe_inv, m_SVD, cT, x3_inv
 import unittest
 from tqdm import trange
 import argparse
@@ -178,9 +178,6 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
     m, p, n = X.shape
     M = np.copy(m_init)
     k = M.shape[0]
-
-    Minv = safe_inv(M)
-
     coord = (1, 1, 1)
     coord_over_time = []
     sumnorm_over_time = []
@@ -195,25 +192,22 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
         for j in trange(iters):
             Uhat, Shat, Vhat = x3(Uh, M), x3(S, M), x3(V, M)
             Uhat_h = Uhat.conj().transpose((1, 0, 2))
-            Spr = x3(xFace(xFace(Uhat_h, Xhat), Vhat), Minv)
+            Spr_hat = xFace(xFace(Uhat_h, Xhat), Vhat)
 
-            print(f"Sum norm over time: {np.sum(np.abs(Spr))}")
-            sumnorm_over_time.append(np.sum(np.abs(Spr)))
-            
-            def fast_grad(i, j):
+            print(f"Sum norm over time: {np.sum(np.abs(Spr_hat))}")
+            sumnorm_over_time.append(np.sum(np.abs(Spr_hat)))
+
+            def fast_grad_trnsf(i, j):
                 grad_from_prods = Uh[:, :, i] @ Xhat[:, :, j] @ Vhat[:, :, j] + \
                                   Uhat_h[:, :, j] @ X[:, :, i] @ Vhat[:, :, j] + \
                                   Uhat_h[:, :, j] @ Xhat[:, :, j] @ V[:, :, i]
-                grad_from_inv = Spr[:, :, i]
-                return np.sum(np.sign(Shat) * outer(grad_from_prods - grad_from_inv, Minv[:, j:j + 1])) / (m*p*n)
-
+                return np.sum(np.sign(Shat[:, :, j]) * grad_from_prods) / (m*p*n)
             # note: dtype is for dtype of the indices, not the output
-            grad = np.fromfunction(np.frompyfunc(fast_grad, 2, 1), shape=(k, k), dtype=np.int)
+            grad = np.fromfunction(np.frompyfunc(fast_grad_trnsf, 2, 1), shape=(k, k), dtype=np.int)
             # output is dtype 'object' and should be float64
 
             M = M - lmbd * grad.astype(np.complex64)
-            Minv = safe_inv(M)
-            coord_over_time.append(Spr[coord])
+            coord_over_time.append(Spr_hat[coord])
         M_pre_ortho = np.copy(M)
         M = orthogonalize(M)
 
@@ -226,7 +220,7 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
         if(not np.all(np.isreal(M))):
             plt.imshow(np.abs(M))
         else:
-            plt.imshow(M)
+            plt.imshow(M.astype(np.float32))
 
     plt.subplot(r, c, 1)
     plt.title("Orthogonalized M")
@@ -243,11 +237,13 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
     plt.title("Singular Tubes as Rows")
     rows = np.vstack([S[None, i, i, :] for i in range(min(m, p))])
     imshow_cpx_safe(rows)
+    plt.colorbar()
 
     plt.subplot(r, c, 4)
     plt.title("Singular Tubes as Rows (Transform Domain)")
     rows_hat = np.vstack([Shat[None, i, i, :] for i in range(min(m, p))])
     imshow_cpx_safe(rows_hat)
+    plt.colorbar()
 
     plt.subplot(r, c, 5)
     plt.title("S[1, 1, 1] Over Time")
@@ -265,7 +261,7 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
     plt.suptitle(f"Optimizing M: $\\lambda={lmbd}$, $\\gamma={gamma}$, itr={iters}, opt_loops={opt_loops}", y =0.99)
     plt.gcf().set_size_inches(15, 15)
     plt.tight_layout()
-    plt.savefig("Optimization.png")
+    plt.savefig("Optimization.png", dpi=120)
     plt.show()
     return M
 
@@ -395,6 +391,6 @@ class TestTensorGradients(unittest.TestCase):
 if __name__ == "__main__":
     cats_R = np.load("data/Cats_RGB.npy")[:, :, :, 0]
     # compressible data via random rank 1 outer products *weighted* with decaying weights
-    opt_M_for_data(cats_R, np.eye(32), lr=1, iters=300, opt_loops=1, regularization=1000)
+    opt_M_for_data(cats_R, haarmtx(32, normalize=True), lr=0.1, iters=250, opt_loops=1, regularization=0)
     unittest.main()
 
