@@ -6,16 +6,43 @@ from matplotlib import cm
 import json
 from scipy.fftpack import dct, fft, ifft
 import pywt
+import traceback
+
+CACHED_M = None
+
+class set_M():
+    def __init__(self, M):
+        self.M = M
+    def __enter__(self):
+        global CACHED_M
+        assert_mat(self.M)
+        assert np.linalg.cond(self.M) < np.inf, "M must be invertible"
+        CACHED_M = self.M
+    def __exit__(self, exc_type, exc_value, tb):
+        global CACHED_M
+        CACHED_M = None
+        if exc_type is not None:
+            traceback.print_exception(exc_type, exc_value, tb)
 
 
 def assert_vec(x):
     assert len(x.shape) == 2
     assert x.shape[1] == 1  # row vectors
 
-
 def assert_mat(x):
     assert len(x.shape) == 2
 
+def _fetch(M):
+    global CACHED_M
+    if M is None:
+        if CACHED_M is None:
+            raise ValueError("Cannot get M as it is currently unspecified.")
+        else:
+            return CACHED_M
+    else:
+        assert_mat(M)
+        assert np.linalg.cond(M) < np.inf, "M must be invertible"
+        return M
 
 def assert_tensor(x, order=3):
     assert (len(x.shape) == order), f"x must be an order-{order} tensor"
@@ -28,6 +55,10 @@ def assert_real(M):
 def normF(A):
     return np.sqrt(np.sum(A ** 2))
 
+def normN(A, M = None):
+    M = _fetch(M)
+    Uh, Sh, Vh = m_SVD(A, M, inv_transform=False)
+    return np.sum(Sh)
 
 def as_vec(A):
     return np.flatten(A)
@@ -57,11 +88,13 @@ def safe_inv(M):
     return Minv
 
 
-def apply_inv(A, M):
+def apply_inv(A, M = None):
+    M = _fetch(M)
     return np.linalg.solve(M, A)
 
 
-def cT(A, M):
+def cT(A, M = None):
+    M = _fetch(M)
     '''
     Conjugate transpose
     '''
@@ -72,7 +105,7 @@ def cT(A, M):
     return np.real_if_close(x3_inv(Ah_hermitian, M), tol=1000)
 
 
-def rT(A, M):
+def rT(A, M = None):
     '''
     Real transpose
     '''
@@ -104,7 +137,8 @@ def mode_fold(A, shape, mode):
         return np.stack([A[:, i * m:(i + 1) * m].T for i in range(p)], axis=1)
 
 
-def mode_prod(A, M, mode):
+def mode_prod(A, M=None, mode=1):
+    M = _fetch(M)
     assert_tensor(A, order=3)
     assert_mat(M)
     assert M.shape[1] == A.shape[mode - 1], f"Incorrect dimensions for {A.shape} x{mode} {M.shape}"
@@ -115,7 +149,8 @@ def mode_prod(A, M, mode):
     return mode_fold(np.matmul(M, mode_unf(A, mode)), s, mode)
 
 
-def mode_inv(A, M, mode):
+def mode_inv(A, M=None, mode=1):
+    M = _fetch(M)
     assert_tensor(A, order=3)
     assert_mat(M)
     assert M.shape[1] == A.shape[mode - 1], f"Incorrect dimensions for {A.shape} x{mode} {M.shape}"
@@ -123,27 +158,33 @@ def mode_inv(A, M, mode):
     return mode_fold(apply_inv(mode_unf(A, mode), M), A.shape, mode)
 
 
-def x3(A, M):
+def x3(A, M=None):
+    M = _fetch(M)
     return mode_prod(A, M, mode=3)
 
 
-def x2(A, M):
+def x2(A, M=None):
+    M = _fetch(M)
     return mode_prod(A, M, mode=2)
 
 
-def x1(A, M):
+def x1(A, M=None):
+    M = _fetch(M)
     return mode_prod(A, M, mode=1)
 
 
-def x3_inv(A, M):
+def x3_inv(A, M=None):
+    M = _fetch(M)
     return mode_inv(A, M, mode=3)
 
 
-def x2_inv(A, M):
+def x2_inv(A, M=None):
+    M = _fetch(M)
     return mode_inv(A, M, mode=2)
 
 
-def x1_inv(A, M):
+def x1_inv(A, M=None):
+    M = _fetch(M)
     return mode_inv(A, M, mode=1)
 
 
@@ -160,7 +201,8 @@ def xFace(A, B):
     return np.stack(C, axis=-1)
 
 
-def xM(A, B, M):
+def xM(A, B, M=None):
+    M = _fetch(M)
     assert_tensor(A, order=3)
     assert_tensor(B, order=3)
     assert_mat(M)
@@ -202,7 +244,8 @@ def fft_H(M):
     return Mt
 
 
-def m_SVD(A, M, inv_transform=True):
+def m_SVD(A, M=None, inv_transform=True):
+    M = _fetch(M)
     assert_tensor(A, order=3)
     assert_mat(M)
 
@@ -231,7 +274,7 @@ def idftmtx(n, normalize=False):
 def dftmtx(n, normalize=False):
     d = fft(np.eye(n), axis=0)
     if (normalize):
-        d = d / np.sqrt(np.sum(d ** 2, axis=1))
+        d = d / np.sqrt(np.sum(np.abs(d) ** 2, axis=1))
     return d
 
 
@@ -389,6 +432,12 @@ class TestTensorProducts(unittest.TestCase):
         A = self.A
         m, p, n = A.shape
         self.assertTrue((x3(A, np.eye(n)) == A).all())
+
+    def test_fourier_m(self):
+        X = np.random.normal(size=(2, 3, 8))
+        M = dftmtx(8, normalize=True)
+        U, S, V = m_SVD(X, M)
+        self.assertTrue(np.allclose(X, xM(xM(U, S, M), cT(V, M), M)))
 
 
 if __name__ == "__main__":
