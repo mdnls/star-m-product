@@ -397,6 +397,6 @@ class TestTensorGradients(unittest.TestCase):
 if __name__ == "__main__":
     cats_R = np.load("data/Cats_RGB.npy")[:, :, :, 0]
     # compressible data via random rank 1 outer products *weighted* with decaying weights
-    opt_M_for_data(cats_R, haarmtx(32, normalize=True), lr=0.0001, iters=250, opt_loops=1, regularization=0, steps_per_coord=250)
+    opt_M_for_data(cats_R, haarmtx(32, normalize=True), lr=0.01, iters=250, opt_loops=1, regularization=0, steps_per_coord=250)
     unittest.main()
 
