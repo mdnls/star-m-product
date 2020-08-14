@@ -146,11 +146,12 @@ def nonortho_penalty_grad(M):
     frobenius_mtm = np.linalg.norm(mtm)
     return 4/(np.sqrt(k) * frobenius_mtm) * ( np.trace(mtm) * M @ M.T @ M / frobenius_mtm**2 - M)
 
-def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=100):
+def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=100, steps_per_coord=5):
     '''
     Given data X, find the orthogonal matrix M which minimizes the sum norm of X's singular tubes. The algorithm
     runs a projected gradient descent type algorithm which has many opt_loops. In each opt_loop, M is orthogonalized,
-    then a sequence of gradient descent steps improve M's compression of X and perturbs its orthogonality.
+    then a sequence of gradient descent steps improve M's compression of X and perturb its orthogonality. Each
+    gradient descent steps updates a cyclically chosen coordinate of M.
 
     Args:
         X: an n1 x n2 x n3 tensor
@@ -160,6 +161,7 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
             may become non-orthogonal.
         regularization: strength of orthogonality penalization, encourages M to be almost orthogonal after each iter
         opt_loops: number of sequences of gradient descent iterations.
+        steps_per_coord: number of optimization steps per coordinate
 
     Returns:
         A n3 x n3 orthogonal matrix which well compressed X
@@ -182,31 +184,35 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
     coord_over_time = []
     sumnorm_over_time = []
     M_pre_ortho = None
-    for i in range(opt_loops):
+
+    for opt_loop in range(opt_loops):
         Xhat = x3(X, M)
         Uh, S, V = m_SVD(X, M)
 
         def outer(A, B):
             return np.tensordot(A[..., None], B, (-1, -1))
 
-        for j in trange(iters):
-            Uhat, Shat, Vhat = x3(Uh, M), x3(S, M), x3(V, M)
-            Uhat_h = Uhat.conj().transpose((1, 0, 2))
-            Spr_hat = xFace(xFace(Uhat_h, Xhat), Vhat)
+        for iter in range(iters):
+            coord_to_update = ( (opt_loop * iters + iter) // steps_per_coord ) % n**2
+            r = coord_to_update // n
+            c = coord_to_update % n
+
+            Uh_hat, Shat, Vhat = x3(Uh, M), x3(S, M), x3(V, M)
+            Spr_hat = xFace(xFace(Uh_hat, Xhat), Vhat)
 
             print(f"Sum norm over time: {np.sum(np.abs(Spr_hat))}")
             sumnorm_over_time.append(np.sum(np.abs(Spr_hat)))
 
             def fast_grad_trnsf(i, j):
                 grad_from_prods = Uh[:, :, i] @ Xhat[:, :, j] @ Vhat[:, :, j] + \
-                                  Uhat_h[:, :, j] @ X[:, :, i] @ Vhat[:, :, j] + \
-                                  Uhat_h[:, :, j] @ Xhat[:, :, j] @ V[:, :, i]
-                return np.sum(np.sign(Shat[:, :, j]) * grad_from_prods) / (m*p*n)
+                                  Uh_hat[:, :, j] @ X[:, :, i] @ Vhat[:, :, j] + \
+                                  Uh_hat[:, :, j] @ Xhat[:, :, j] @ V[:, :, i]
+                return np.sum(np.sign(Spr_hat[:, :, j]) * grad_from_prods) / (m*p*n)
             # note: dtype is for dtype of the indices, not the output
-            grad = np.fromfunction(np.frompyfunc(fast_grad_trnsf, 2, 1), shape=(k, k), dtype=np.int)
+            grad = fast_grad_trnsf(r, c)
             # output is dtype 'object' and should be float64
 
-            M = M - lmbd * grad.astype(np.complex64)
+            M[r, c] = M[r, c] - lmbd * grad.astype(np.complex64)
             coord_over_time.append(Spr_hat[coord])
         M_pre_ortho = np.copy(M)
         M = orthogonalize(M)
@@ -391,6 +397,6 @@ class TestTensorGradients(unittest.TestCase):
 if __name__ == "__main__":
     cats_R = np.load("data/Cats_RGB.npy")[:, :, :, 0]
     # compressible data via random rank 1 outer products *weighted* with decaying weights
-    opt_M_for_data(cats_R, haarmtx(32, normalize=True), lr=0.1, iters=250, opt_loops=1, regularization=0)
+    opt_M_for_data(cats_R, haarmtx(32, normalize=True), lr=0.0001, iters=250, opt_loops=1, regularization=0, steps_per_coord=250)
     unittest.main()
 
