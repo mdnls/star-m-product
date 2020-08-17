@@ -267,21 +267,21 @@ def m_SVD(A, M=None, inv_transform=True):
 def idftmtx(n, normalize=False):
     d = ifft(np.eye(n), axis=0)
     if (normalize):
-        d = d / np.sqrt(np.sum(d ** 2, axis=1))
+        d = d / np.sqrt(np.sum(d ** 2, axis=1)).reshape((-1, 1))
     return d
 
 
 def dftmtx(n, normalize=False):
     d = fft(np.eye(n), axis=0)
     if (normalize):
-        d = d / np.sqrt(np.sum(np.abs(d) ** 2, axis=1))
+        d = d / np.sqrt(np.sum(np.abs(d) ** 2, axis=1)).reshape((-1, 1))
     return d
 
 
 def dctmtx(n, normalize=False):
     d = dct(np.eye(n), axis=0)
     if (normalize):
-        d = d / np.sqrt(np.sum(d ** 2, axis=1))
+        d = d / np.sqrt(np.sum(d ** 2, axis=1)).reshape((-1, 1))
     return d
 
 
@@ -326,7 +326,7 @@ def haarmtx(n, normalize=False):
 
     h = _haarmtx(k, [[1, ]])
     if (normalize):
-        h = h / np.sqrt(np.sum(h ** 2, axis=1))
+        h = h / np.sqrt(np.sum(h ** 2, axis=1)).reshape((-1, 1))
     return h
 
 
