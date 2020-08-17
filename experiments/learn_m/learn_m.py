@@ -146,7 +146,7 @@ def nonortho_penalty_grad(M):
     frobenius_mtm = np.linalg.norm(mtm)
     return 4/(np.sqrt(k) * frobenius_mtm) * ( np.trace(mtm) * M @ M.T @ M / frobenius_mtm**2 - M)
 
-def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=100, steps_per_coord=5):
+def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=100, steps_per_coord=5, coord_is="cell"):
     '''
     Given data X, find the orthogonal matrix M which minimizes the sum norm of X's singular tubes. The algorithm
     runs a projected gradient descent type algorithm which has many opt_loops. In each opt_loop, M is orthogonalized,
@@ -162,9 +162,10 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
         regularization: strength of orthogonality penalization, encourages M to be almost orthogonal after each iter
         opt_loops: number of sequences of gradient descent iterations.
         steps_per_coord: number of optimization steps per coordinate
+        coord_is: one of ("matrix", "row", "cell") to indicate whether to update all of M, a row of M or a cell of M at once
 
     Returns:
-        A n3 x n3 orthogonal matrix which well compressed X
+        A n3 x n3 orthogonal matrix which well compresses X
     '''
 
     def orthogonalize(M, mode="qr"):
@@ -193,15 +194,8 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
             return np.tensordot(A[..., None], B, (-1, -1))
 
         for iter in range(iters):
-            coord_to_update = ( (opt_loop * iters + iter) // steps_per_coord ) % n**2
-            r = coord_to_update // n
-            c = coord_to_update % n
-
             Uh_hat, Shat, Vhat = x3(Uh, M), x3(S, M), x3(V, M)
             Spr_hat = xFace(xFace(Uh_hat, Xhat), Vhat)
-
-            print(f"Sum norm over time: {np.sum(np.abs(Spr_hat))}")
-            sumnorm_over_time.append(np.sum(np.abs(Spr_hat)))
 
             def fast_grad_trnsf(i, j):
                 grad_from_prods = Uh[:, :, i] @ Xhat[:, :, j] @ Vhat[:, :, j] + \
@@ -209,10 +203,28 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
                                   Uh_hat[:, :, j] @ Xhat[:, :, j] @ V[:, :, i]
                 return np.sum(np.sign(Spr_hat[:, :, j]) * grad_from_prods) / (m*p*n)
             # note: dtype is for dtype of the indices, not the output
-            grad = fast_grad_trnsf(r, c)
-            # output is dtype 'object' and should be float64
 
-            M[r, c] = M[r, c] - lmbd * grad.astype(np.complex64)
+            global_idx = ((opt_loop * iters + iter) // steps_per_coord)
+            if(coord_is == "cell"):
+                cell_to_update =  global_idx % n ** 2
+                r = cell_to_update // n
+                c = cell_to_update % n
+                grad = fast_grad_trnsf(r, c)
+                M[r, c] = M[r, c] - lmbd * grad.astype(np.complex64)
+            if(coord_is == "row"):
+                row_to_update = global_idx % n
+                grad = np.vectorize(lambda c: fast_grad_trnsf(row_to_update, c))(np.arange(n))
+                M[row_to_update] = M[row_to_update] - lmbd * grad.astype(np.complex64)
+            if(coord_is == "col"):
+                col_to_update = global_idx % n
+                grad = np.vectorize(lambda r: fast_grad_trnsf(r, col_to_update))(np.arange(n))
+                M[:, col_to_update] = M[:, col_to_update] - lmbd * grad.astype(np.complex64)
+            if(coord_is == "matrix"):
+                grad = np.frompyfunc(fast_grad_trnsf, 2, 1).outer(np.arange(n), np.arange(n)).astype(np.complex64)
+                M = M - lmbd * grad
+
+            sumnorm_over_time.append(np.sum(np.abs(Spr_hat)))
+            print(f"Sum norm over time: {np.sum(np.abs(Spr_hat))} - working on {global_idx}")
             coord_over_time.append(Spr_hat[coord])
         M_pre_ortho = np.copy(M)
         M = orthogonalize(M)
@@ -269,7 +281,7 @@ def opt_M_for_data(X, m_init, lr=0.001, iters=1, regularization=0.01, opt_loops=
     plt.tight_layout()
     plt.savefig("Optimization.png", dpi=120)
     plt.show()
-    return M
+    return M, M_pre_ortho
 
 
 
@@ -397,6 +409,7 @@ class TestTensorGradients(unittest.TestCase):
 if __name__ == "__main__":
     cats_R = np.load("data/Cats_RGB.npy")[:, :, :, 0]
     # compressible data via random rank 1 outer products *weighted* with decaying weights
-    opt_M_for_data(cats_R, haarmtx(32, normalize=True), lr=0.01, iters=250, opt_loops=1, regularization=0, steps_per_coord=250)
+    Mpr, Mpr_pre_ortho = opt_M_for_data(cats_R, haarmtx(32, normalize=True), lr=0.0001, iters=200, opt_loops=2, regularization=0, steps_per_coord=200, coord_is="matrix")
+    delta = haarmtx(32, normalize=True) - Mpr_pre_ortho
     unittest.main()
 
